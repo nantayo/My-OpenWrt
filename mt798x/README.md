@@ -1,0 +1,1 @@
+.config从[上游](https://github.com/hanwckf/immortalwrt-mt798x/commits/openwrt-21.02/defconfig/mt7981-ax3000.config)获取的最新commit为：2f36f445bb6b5e30cf1d3cbc72400d30decf6387
