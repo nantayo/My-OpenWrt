@@ -1,0 +1,31 @@
+config interface 'loopback'
+	option proto 'static'
+	option device 'lo'
+	option ipaddr '127.0.0.1'
+	option netmask '255.0.0.0'
+
+config interface 'lan'
+	option proto 'static'
+	option device 'br-lan'
+	option ipaddr '192.168.5.1/29'
+	option multipath 'off'
+	option delegate '0'
+
+config interface 'wan'
+	option proto 'static'
+	option device 'eth0'
+	option ipaddr '10.165.241.251/24'
+	option gateway '10.165.241.254'
+	list dns '172.20.50.97'
+	list dns '192.168.20.5'
+	option multipath 'off'
+	option delegate '0'
+
+config device
+	option type 'bridge'
+	option name 'br-lan'
+	option bridge_empty '1'
+
+config globals 'globals'
+	option packet_steering '2'
+	option steering_flows '256'

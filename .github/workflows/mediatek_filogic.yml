@@ -1,0 +1,184 @@
+name: Build ImmortalWrt-25.12 for mediatek_filogic
+
+on:
+  workflow_dispatch:
+   inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - true
+          - false
+      RAX3000M:
+        description: 'Build RAX3000M firmware'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - true
+          - false
+      R30B1:
+        description: 'Build R30B1 firmware'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - true
+          - false
+      SSB:
+        description: 'Build SSB firmware'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - true
+          - false
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  REPO_URL: https://github.com/chasey-dev/immortalwrt-mt798x-rebase
+  REPO_BRANCH: 25.12
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Initialize environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo -E apt-get -qq update > /dev/null
+        sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
+        sudo -E apt-get -qq autoremove --purge > /dev/null
+        sudo -E apt-get -qq clean > /dev/null
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Clone source code
+      working-directory: /workdir
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
+
+    - name: Update & Install feeds
+      run: |
+        chmod +x mediatek/filogic/diy/diy.sh
+        cd openwrt
+        ./scripts/feeds update -a
+        $GITHUB_WORKSPACE/mediatek/filogic/diy/diy.sh
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: SSH connect to Actions
+      uses: P3TERX/ssh2actions@main
+      if: ${{ github.event.inputs.ssh == 'true' }}
+
+    - name: Load RAX3000M custom config
+      if: ${{ github.event.inputs.RAX3000M == 'true' }}
+      run: |
+        rm -rf openwrt/files openwrt/.config
+        mv mediatek/filogic/4-RAX3000M/files mediatek/filogic/4-RAX3000M/.config openwrt/
+
+    - name: Download package
+      if: ${{ github.event.inputs.RAX3000M == 'true' }}
+      working-directory: ./openwrt
+      run: |
+        make defconfig
+        make download -j$(( $(nproc) * 2 ))
+        find dl -size -1k -exec rm -f {} \;
+
+    - name: Compile RAX3000M firmware
+      if: ${{ github.event.inputs.RAX3000M == 'true' }}
+      run: |
+        chmod -R 755 openwrt
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(( $(nproc) + 1 )) || make -j1 V=s
+        mv bin/targets/mediatek/filogic/*nand-preloader.bin 4-RAX3000M-bl2.bin
+        mv bin/targets/mediatek/filogic/*sysupgrade.itb 4-RAX3000M.itb
+        find bin/targets/mediatek/filogic -mindepth 1 -delete
+
+    - name: Upload RAX3000M firmware to release
+      if: ${{ github.event.inputs.RAX3000M == 'true' }}
+      uses: softprops/action-gh-release@master
+      with:
+        tag_name: OpenWrt_mediatek_filogic_${{ env.FILE_DATE }}
+        files: openwrt/4-RAX3000M*
+
+    - name: Load R30B1 custom config
+      if: ${{ github.event.inputs.R30B1 == 'true' }}
+      run: |
+        rm -rf openwrt/files openwrt/.config
+        mv mediatek/filogic/4-R30B1/files mediatek/filogic/4-R30B1/.config openwrt/
+
+    - name: Download package
+      if: ${{ github.event.inputs.R30B1 == 'true' }}
+      working-directory: ./openwrt
+      run: |
+        make defconfig
+        make download -j$(( $(nproc) * 2 ))
+        find dl -size -1k -exec rm -f {} \;
+
+    - name: Compile R30B1 firmware
+      if: ${{ github.event.inputs.R30B1 == 'true' }}
+      run: |
+        chmod -R 755 openwrt
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(( $(nproc) + 1 )) || make -j1 V=s
+        mv bin/targets/mediatek/filogic/*.bin 4-R30B1.bin
+        find bin/targets/mediatek/filogic -mindepth 1 -delete
+
+    - name: Upload R30B1 firmware to release
+      if: ${{ github.event.inputs.R30B1 == 'true' }}
+      uses: softprops/action-gh-release@master
+      with:
+        tag_name: OpenWrt_mediatek_filogic_${{ env.FILE_DATE }}
+        files: openwrt/4-R30B1.bin
+
+    - name: Load SSB custom config
+      if: ${{ github.event.inputs.SSB == 'true' }}
+      run: |
+        rm -rf openwrt/files openwrt/.config
+        mv mediatek/filogic/6-SSB/files mediatek/filogic/6-SSB/.config openwrt/
+
+    - name: Download package
+      if: ${{ github.event.inputs.SSB == 'true' }}
+      working-directory: ./openwrt
+      run: |
+        make defconfig
+        make download -j$(( $(nproc) * 2 ))
+        find dl -size -1k -exec rm -f {} \;
+
+    - name: Compile SSB firmware
+      if: ${{ github.event.inputs.SSB == 'true' }}
+      run: |
+        chmod -R 755 openwrt
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(( $(nproc) + 1 )) || make -j1 V=s
+        mv bin/targets/mediatek/filogic/*.bin 6-SSB.bin
+        find bin/targets/mediatek/filogic -mindepth 1 -delete
+
+    - name: Upload SSB firmware to release
+      if: ${{ github.event.inputs.SSB == 'true' }}
+      uses: softprops/action-gh-release@master
+      with:
+        tag_name: OpenWrt_mediatek_filogic_${{ env.FILE_DATE }}
+        files: openwrt/6-SSB.bin
+
+    - name: Delete old releases
+      uses: mgz0227/delete-older-releases@master
+      with:
+        keep_latest: 2
+        delete_tags : true
+        delete_tag_pattern : mediatek_filogic
