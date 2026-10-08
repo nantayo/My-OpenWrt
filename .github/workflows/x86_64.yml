@@ -1,0 +1,126 @@
+name: Build ImmortalWrt-25.12 for x86_64
+
+on:
+  workflow_dispatch:
+    inputs:
+      G7505:
+        description: 'Build G7505 firmware'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - true
+          - false
+      N4505:
+        description: 'Build N4505 firmware'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - true
+          - false
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: openwrt-25.12
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: 2-7505
+            input_key: G7505
+            goamd64: v4
+            patches: >-
+              simplify-i915-firmware.patch
+              simplify-intel-microcode.patch
+          - device: 3-N4505
+            input_key: N4505
+            goamd64: v2
+            patches: >-
+              simplify-intel-microcode.patch
+
+    steps:
+    - name: Checkout
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      uses: actions/checkout@main
+
+    - name: Initialize environment
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo -E apt-get -qq update > /dev/null
+        sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
+        sudo -E apt-get -qq autoremove --purge > /dev/null
+        sudo -E apt-get -qq clean > /dev/null
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Clone source code
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      working-directory: /workdir
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
+
+    - name: Update & Install feeds
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      working-directory: ./openwrt
+      run: |
+        ./scripts/feeds update -a
+        bash $GITHUB_WORKSPACE/x86/64/diy/diy.sh
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Adjust source code for ${{ matrix.input_key }}
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      working-directory: ./openwrt
+      run: |
+        for p in ${{ matrix.patches }}; do
+          patch -p1 -f < $GITHUB_WORKSPACE/x86/64/${{ matrix.device }}/$p
+        done
+        sed -i -E 's/GO_AMD64:=v[0-9]+$/GO_AMD64:=${{ matrix.goamd64 }}/' feeds/packages/lang/golang/golang-values.mk
+
+    - name: Load ${{ matrix.input_key }} custom config
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      run: |
+        rm -rf openwrt/files openwrt/.config
+        mv x86/64/${{ matrix.device }}/files x86/64/${{ matrix.device }}/.config openwrt/
+        chmod -R 755 openwrt
+
+    - name: Download package
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      working-directory: ./openwrt
+      run: |
+        make defconfig
+        make download -j$(( $(nproc) * 2 ))
+
+    - name: Compile ${{ matrix.input_key }} firmware
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      working-directory: ./openwrt
+      run: |
+        make -j$(( $(nproc) + 1 )) || make -j1 V=s
+        mv bin/targets/x86/64/*efi.img.gz ${{ matrix.device }}.img.gz
+        find bin/targets/x86/64 -mindepth 1 -delete
+
+    - name: Upload ${{ matrix.input_key }} firmware to release
+      if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+      uses: softprops/action-gh-release@master
+      with:
+        tag_name: OpenWrt_x86_64_${{ env.FILE_DATE }}
+        files: openwrt/${{ matrix.device }}.img.gz
+
+    - name: Delete old releases
+      uses: mgz0227/delete-older-releases@master
+      with:
+        keep_latest: 2
+        delete_tags : true
+        delete_tag_pattern : x86_64
