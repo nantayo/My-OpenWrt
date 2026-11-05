@@ -1,0 +1,8 @@
+config turboacc 'global'
+	option set '0'
+
+config turboacc 'config'
+	option fastpath 'mediatek_hnat'
+	option fastpath_mh_bind_rate '1'
+	option fastpath_mh_update_nfct '0'
+	option tcpcca 'cubic'

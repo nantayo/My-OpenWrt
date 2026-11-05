@@ -1,0 +1,129 @@
+name: Build ImmortalWrt-25.12 for mediatek_filogic
+
+on:
+  workflow_dispatch:
+    inputs:
+      RAX3000M:
+        description: 'Build RAX3000M firmware'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - true
+          - false
+      R30B1:
+        description: 'Build R30B1 firmware'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - true
+          - false
+      SSB:
+        description: 'Build SSB firmware'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - true
+          - false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  REPO_URL: https://github.com/chasey-dev/immortalwrt-mt798x-rebase
+  REPO_BRANCH: 25.12
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: 4-RAX3000M
+            input_key: RAX3000M
+            artifacts: >-
+              *nand-preloader.bin:-bl2.bin
+              *sysupgrade.itb:.itb
+          - device: R30B1
+            input_key: R30B1
+            artifacts: >-
+              *sysupgrade.bin:.bin
+          - device: 6-SSB
+            input_key: SSB
+            artifacts: >-
+              *sysupgrade.bin:.bin
+
+    steps:
+      - name: Checkout
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        uses: actions/checkout@main
+
+      - name: Initialize environment
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update > /dev/null
+          sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone source code
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        working-directory: /workdir
+        run: |
+          git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
+
+      - name: Update & Install feeds
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        working-directory: ./openwrt
+        run: |
+          ./scripts/feeds update -a
+          bash $GITHUB_WORKSPACE/mediatek/filogic/diy/diy.sh
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load ${{ matrix.input_key }} custom config
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        run: |
+          rm -rf openwrt/files openwrt/.config
+          mv mediatek/filogic/${{ matrix.device }}/files mediatek/filogic/${{ matrix.device }}/.config openwrt/
+          chmod -R 755 openwrt
+
+      - name: Download package
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        working-directory: ./openwrt
+        run: |
+          make defconfig
+          make download -j$(( $(nproc) * 2 ))
+
+      - name: Compile ${{ matrix.input_key }} firmware
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        working-directory: ./openwrt
+        run: |
+          make -j$(( $(nproc) + 1 )) || make -j1 V=s
+          for a in ${{ matrix.artifacts }}; do
+            src="${a%%:*}"
+            sfx="${a##*:}"
+            mv bin/targets/mediatek/filogic/$src ${{ matrix.device }}$sfx
+          done
+
+      - name: Upload ${{ matrix.input_key }} firmware to release
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        run: |
+          tag="OpenWrt_mediatek_filogic_${{ env.FILE_DATE }}"
+          gh release create $tag --repo ${{ github.repository }} --title "$tag" --notes "" 2> /dev/null || true
+          gh release upload $tag openwrt/${{ matrix.device }}* --repo ${{ github.repository }} --clobber
+
+  cleanup:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete old releases
+        run: |
+          gh release list --repo ${{ github.repository }} --limit 100 --json tagName --jq '.[] | .tagName | select(test("mediatek_filogic"))' | tail -n +3 | while read -r tag; do gh release delete "$tag" --repo ${{ github.repository }} --cleanup-tag --yes; done
