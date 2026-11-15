@@ -1,0 +1,46 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+
+FAIL_FILE=/etc/.custom_pd_fail
+
+wait_for() {
+	end=$(( $(date +%s) + 120 ))
+	while [ "$(date +%s)" -lt "$end" ]; do
+		$1 && return 0
+		sleep 5
+	done
+	return 1
+}
+
+modem_up() { ping -c1 -W1 192.168.2.2 >/dev/null 2>&1; }
+ipv6_up()  { ubus call network.interface.wan_6 status 2>/dev/null | grep -q '"ipv6-prefix"'; }
+proxy_up() { uclient-fetch -T 5 -O /dev/null https://www.pixiv.net/ >/dev/null 2>&1; }
+
+pd_fail() {
+	cnt=$(( $(cat $FAIL_FILE 2>/dev/null || echo 0) + 1 ))
+	echo $cnt > $FAIL_FILE
+	[ $cnt -le 2 ] && reboot
+	exit 0
+}
+
+start() {
+	(
+		/opt/smart.sh &
+		/opt/pfx.sh &
+
+		wait_for modem_up || exit 0
+
+		/sbin/ifup wan
+		wait_for ipv6_up || pd_fail
+		rm -f $FAIL_FILE
+
+		wait_for proxy_up
+
+		podman start Jellyfin OpenCode qBittorrent PeerBanHelper RSSHub
+	) &
+}
+
+stop() {
+	podman stop -i -t 5 Mumble Jellyfin OpenCode qBittorrent PeerBanHelper RSSHub
+}
