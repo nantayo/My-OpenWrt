@@ -1,0 +1,30 @@
+# XG-040G-MF: ponwrt 默认网络骨架（board.d 语义一致，首次启动时 PON 认证在 LuCI「网络 → PON」填写）
+# wan=pon0 由 PON 栈接管；运营商 IPoE 保持 dhcp，PPPoE 改 proto 为 pppoe 并按需加 pon0.vlanid
+# 2.5G 电口（GDM3）默认未分配，如需使用在 LuCI「网络 → 接口 → 设备」自行添加
+
+config interface 'loopback'
+	option device 'lo'
+	option proto 'static'
+	option ipaddr '127.0.0.1/8'
+
+config globals 'globals'
+	option packet_steering '1'
+
+config device
+	option name 'br-lan'
+	option type 'bridge'
+	list ports 'lan1'
+	list ports 'lan2'
+	list ports 'lan3'
+	list ports 'lan4'
+
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'static'
+	option ipaddr '192.168.1.1'
+	option netmask '255.255.255.0'
+	option ip6assign '60'
+
+config interface 'wan'
+	option device 'pon0'
+	option proto 'dhcp'
