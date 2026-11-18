@@ -1,0 +1,71 @@
+name: Build PonWrt for airoha_an7583
+
+on:
+  workflow_dispatch:
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  REPO_URL: https://github.com/pbs05/ponwrt
+  REPO_BRANCH: master
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Initialize environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update > /dev/null
+          sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone source code
+        working-directory: /workdir
+        run: |
+          git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
+
+      - name: Update & Install feeds
+        working-directory: ./openwrt
+        run: |
+          ./scripts/feeds update -a
+          bash $GITHUB_WORKSPACE/airoha/an7583/diy/diy.sh
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load XG-040G-MF custom config
+        run: |
+          rm -rf openwrt/files openwrt/.config
+          mv airoha/an7583/4-XG-040G-MF/files airoha/an7583/4-XG-040G-MF/.config openwrt/
+
+      - name: Download package
+        working-directory: ./openwrt
+        run: |
+          make defconfig
+          make download -j$(( $(nproc) * 2 ))
+
+      - name: Compile XG-040G-MF firmware
+        working-directory: ./openwrt
+        run: |
+          make -j$(( $(nproc) + 1 )) || make -j1 V=s
+          mv bin/targets/airoha/an7583/*sysupgrade.itb 4-XG-040G-MF.itb
+          mv bin/targets/airoha/an7583/*preloader.bin 4-XG-040G-MF-preloader.bin
+          mv bin/targets/airoha/an7583/*uboot.fip 4-XG-040G-MF-uboot.fip
+
+      - name: Upload XG-040G-MF firmware to release
+        run: |
+          tag="OpenWrt_airoha_an7583_${{ env.FILE_DATE }}"
+          gh release create $tag --repo ${{ github.repository }} --title "$tag" --notes "" 2> /dev/null || true
+          gh release upload $tag openwrt/4-XG-040G-MF* --repo ${{ github.repository }} --clobber
+
+      - name: Delete old releases
+        run: |
+          gh release list --repo ${{ github.repository }} --limit 100 --json tagName --jq '.[] | .tagName | select(test("airoha_an7583"))' | tail -n +3 | while read -r tag; do gh release delete "$tag" --repo ${{ github.repository }} --cleanup-tag --yes; done
