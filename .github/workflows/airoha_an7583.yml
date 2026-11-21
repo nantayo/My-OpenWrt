@@ -1,0 +1,109 @@
+name: Build PonWrt for airoha_an7583
+
+on:
+  workflow_dispatch:
+    inputs:
+      XG040GMF3:
+        description: 'Build 3-XG-040G-MF firmware'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - true
+          - false
+      XG040GMF4:
+        description: 'Build 4-XG-040G-MF firmware'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - true
+          - false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  REPO_URL: https://github.com/pbs05/ponwrt
+  REPO_BRANCH: master
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: 3-XG-040G-MF
+            input_key: XG040GMF3
+          - device: 4-XG-040G-MF
+            input_key: XG040GMF4
+
+    steps:
+      - name: Checkout
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        uses: actions/checkout@main
+
+      - name: Initialize environment
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update > /dev/null
+          sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone source code
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        working-directory: /workdir
+        run: |
+          git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
+
+      - name: Update & Install feeds
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        working-directory: ./openwrt
+        run: |
+          ./scripts/feeds update -a
+          bash $GITHUB_WORKSPACE/airoha/an7583/diy/diy.sh
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load ${{ matrix.device }} custom config
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        run: |
+          rm -rf openwrt/files openwrt/.config
+          mv airoha/an7583/${{ matrix.device }}/files airoha/an7583/${{ matrix.device }}/.config openwrt/
+          chmod -R 755 openwrt/files
+
+      - name: Download package
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        working-directory: ./openwrt
+        run: |
+          make defconfig
+          make download -j$(( $(nproc) * 2 ))
+
+      - name: Compile ${{ matrix.device }} firmware
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        working-directory: ./openwrt
+        run: |
+          make -j$(( $(nproc) + 1 )) || make -j1 V=s
+          mv bin/targets/airoha/an7583/*sysupgrade.itb ${{ matrix.device }}.itb
+          mv bin/targets/airoha/an7583/*preloader.bin ${{ matrix.device }}-preloader.bin
+          mv bin/targets/airoha/an7583/*uboot.fip ${{ matrix.device }}-uboot.fip
+
+      - name: Upload ${{ matrix.device }} firmware to release
+        if: ${{ github.event.inputs[matrix.input_key] == 'true' }}
+        run: |
+          tag="OpenWrt_airoha_an7583_${{ env.FILE_DATE }}"
+          gh release create $tag --repo ${{ github.repository }} --title "$tag" --notes "" 2> /dev/null || true
+          gh release upload $tag openwrt/${{ matrix.device }}* --repo ${{ github.repository }} --clobber
+
+  cleanup:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete old releases
+        run: |
+          gh release list --repo ${{ github.repository }} --limit 100 --json tagName --jq '.[] | .tagName | select(test("airoha_an7583"))' | tail -n +3 | while read -r tag; do gh release delete "$tag" --repo ${{ github.repository }} --cleanup-tag --yes; done
